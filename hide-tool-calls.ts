@@ -1,3 +1,6 @@
+import { readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 
@@ -18,8 +21,11 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 // immediately. Delegated levels ("collapsed"/"full") call the tool's own
 // renderers, so built-in and custom tools keep their native rendering.
 //
-// The level lives in a globalThis slot, so it survives /reload and applies to
-// rows created by earlier extension instances too.
+// The level lives in a small state file in the agent dir (honors
+// PI_CODING_AGENT_DIR), so it persists across sessions and /reload, and
+// applies to rows created by earlier extension instances too. If the file
+// can't be read or written (first run, read-only fs), the session falls back
+// to in-memory persistence with DEFAULT_MODE as the startup level.
 //
 // Components implement render() AND invalidate(): the host wraps every
 // renderer component in a MouseRegion, whose invalidate() calls through to the
@@ -35,6 +41,16 @@ const DEFAULT_MODE: QuietMode = "name";
 const EXEMPT_TOOLS = new Set(["subagent"]);
 const INDENT = " ";
 const MODE_KEY = "__piQuietToolsMode";
+const STATE_FILE = join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "hide-tool-calls.json");
+
+function loadPersistedLevel(): void {
+	try {
+		const raw = JSON.parse(readFileSync(STATE_FILE, "utf8"));
+		if (MODES.includes(raw?.level)) (globalThis as any)[MODE_KEY] = raw.level;
+	} catch {
+		// first run, missing or corrupt file — keep DEFAULT_MODE
+	}
+}
 
 function getMode(): QuietMode {
 	const value = (globalThis as any)[MODE_KEY];
@@ -43,6 +59,11 @@ function getMode(): QuietMode {
 
 function setMode(next: QuietMode): void {
 	(globalThis as any)[MODE_KEY] = next;
+	try {
+		writeFileSync(STATE_FILE, JSON.stringify({ level: next }, null, 2) + "\n");
+	} catch {
+		// unwritable state file — level still applies for this session
+	}
 }
 
 function cycleMode(): QuietMode {
@@ -237,6 +258,8 @@ function createQuietPart(toolName: string, slot: "call" | "result", base: BaseRe
 }
 
 export default function hideToolCalls(pi: ExtensionAPI) {
+	loadPersistedLevel();
+
 	pi.registerToolRenderer((toolName, next) => {
 		const base = next?.();
 

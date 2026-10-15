@@ -1,6 +1,13 @@
 // Headless simulation of the ToolExecutionComponent renderer contract against
 // the quiet-tools extension. Run: EXT_PATH=... node --experimental-strip-types quiet-tools-smoke.mjs
 import { pathToFileURL } from "node:url";
+import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
+
+// State-file persistence target: the extension reads PI_CODING_AGENT_DIR at
+// load time, so point it at a test-owned dir before importing it.
+process.env.PI_CODING_AGENT_DIR = new URL("./agent-dir", import.meta.url).pathname;
+mkdirSync(process.env.PI_CODING_AGENT_DIR, { recursive: true });
+const stateFile = process.env.PI_CODING_AGENT_DIR + "/hide-tool-calls.json";
 
 const captured = {};
 const fakePi = {
@@ -186,9 +193,12 @@ region.invalidate(); // must not throw
 callPart.render(80);
 ok(base.calls === cachedCalls + 1, "invalidate forces one re-delegate");
 
-// ============ /reload: fresh module instance ============
-// Old parts must follow the new module's level (globalThis persistence).
+// ============ persistence: state file + /reload ============
+// Level changes write the state file; a fresh module instance (reload or new
+// process) reads it back even with no global slot present.
 captured.command.handler("none", { mode: "tui", ui: { notify: () => {} } }); // leave at none
+ok(JSON.parse(readFileSync(stateFile, "utf8")).level === "none", "level change writes state file");
+delete globalThis.__piQuietToolsMode; // simulate a brand-new process (no global slot)
 const reloaded = await import(pathToFileURL(process.env.EXT_PATH).href + "?reload=1");
 const captured2 = {};
 reloaded.default({
@@ -197,8 +207,35 @@ reloaded.default({
 	registerCommand: (n, o) => { captured2.command = { name: n, ...o }; },
 });
 ok(captured2.resolver, "reloaded module registers resolver");
-ok(callPart.render(80).length === 0, "old row obeys reloaded module's level (none)");
-captured2.command.handler("name", { mode: "tui", ui: { notify: () => {} } });
-ok(callPart.render(80).length === 1 && callPart.render(80)[0].includes("Reading a.ts..."), "old row follows new level (name)");
+ok(callPart.render(80).length === 0, "old row obeys reloaded module's level (none, from state file)");
+
+// fresh-process simulation: global slot wiped, state file says what's next
+captured2.command.handler("collapsed", { mode: "tui", ui: { notify: () => {} } });
+delete globalThis.__piQuietToolsMode;
+const fresh = await import(pathToFileURL(process.env.EXT_PATH).href + "?fresh=1");
+const captured3 = {};
+fresh.default({
+	registerToolRenderer: (r) => { captured3.resolver = r; },
+	registerShortcut: () => {},
+	registerCommand: (n, o) => { captured3.command = { name: n, ...o }; },
+});
+const freshCall = mustBeQuietPart(captured3.resolver("read", () => makeBaseRenderer()).renderCall({ path: "a.ts" }, theme, ctx()));
+const freshLines = freshCall.render(80);
+console.log("fresh-process level:", JSON.stringify(freshLines));
+ok(freshLines[0].includes("read a.ts"), "fresh process restores persisted level (collapsed) from state file");
+
+// corrupt state file → default level, no crash
+writeFileSync(stateFile, "{ this is not json !!!");
+delete globalThis.__piQuietToolsMode;
+const corrupt = await import(pathToFileURL(process.env.EXT_PATH).href + "?corrupt=1");
+const captured4 = {};
+corrupt.default({
+	registerToolRenderer: (r) => { captured4.resolver = r; },
+	registerShortcut: () => {},
+	registerCommand: (n, o) => { captured4.command = { name: n, ...o }; },
+});
+const c4call = mustBeQuietPart(captured4.resolver("read", () => makeBaseRenderer()).renderCall({ path: "a.ts" }, theme, ctx()));
+ok(c4call.render(80)[0].includes("Reading a.ts..."), "corrupt state file falls back to default (name)");
+captured4.command.handler("name", { mode: "tui", ui: { notify: () => {} } }); // restore a valid file
 
 console.log("\nALL QUIET-TOOLS SMOKE CHECKS PASSED");

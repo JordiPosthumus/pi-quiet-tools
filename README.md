@@ -15,6 +15,8 @@ Cycle with **`ctrl+shift+o`**, or jump directly with `/quiet-tools [level]`:
 
 The native `ctrl+o` still toggles output expansion inside `collapsed`; clicking a tool row works too.
 
+**Persistent by default.** The selected level is written to a small state file (`hide-tool-calls.json` in your agent dir, honoring `PI_CODING_AGENT_DIR`) and restored on every startup and `/reload`. If the file is missing, corrupt, or unwritable, the session falls back to the built-in default silently.
+
 **Errors are never hidden.** At the quiet levels a failed tool renders one compact red line (` ✗ edit: message...`), so failures can't scroll past unnoticed.
 
 Tools listed in `EXEMPT_TOOLS` (default: `subagent`) render exactly as their own renderers draw them — useful for dashboards like background-agent progress cards.
@@ -33,10 +35,11 @@ Requires pi 1.2.0+ (uses `registerToolRenderer`). Take effect immediately with `
 
 All knobs are constants at the top of the file:
 
-- `DEFAULT_MODE` — startup level (`"name"`)
+- `DEFAULT_MODE` — startup level (`"name"`), used when no valid state file exists
 - `EXEMPT_TOOLS` — tool names that pass through untouched
 - `ARG_LABELS` — the verb lines per tool; unknown tools fall back to the bare tool name
-- `MODE_KEY` / keybinding — the `globalThis` slot that keeps your level across `/reload`, and the `pi.registerShortcut(...)` key
+- keybinding — the `pi.registerShortcut(...)` key
+- state file — `hide-tool-calls.json` in the agent dir (`PI_CODING_AGENT_DIR`-aware); delete it to reset to `DEFAULT_MODE`
 
 ## Notes for extension authors
 
